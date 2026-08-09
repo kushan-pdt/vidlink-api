@@ -5,13 +5,16 @@ from playwright.async_api import async_playwright
 
 app = FastAPI()
 
-# Flutter App එකෙන් Requests එන්න CORS Allow කිරීම
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/")
+def read_root():
+    return {"status": "API is running"}
 
 @app.get("/get-stream/{media_type}/{tmdb_id}")
 async def get_stream(
@@ -32,14 +35,21 @@ async def get_stream(
     captured_data = {"stream": None}
 
     async with async_playwright() as p:
-        # Render Server එකේ Background එකේ දිවීමට Headless = True
-        browser = await p.firefox.launch(headless=True)
+        # Browser with cloud flags
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu"
+            ]
+        )
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
 
-        # Network requests intercept කර .mpd link එක සොයාගැනීම
         def handle_request(request):
             req_url = request.url
             if ".mpd" in req_url and not captured_data["stream"]:
@@ -51,7 +61,6 @@ async def get_stream(
             await page.goto(url, timeout=60000)
             await asyncio.sleep(4)
 
-            # Video player එක active කිරීමට Click එකක් කිරීම
             await page.mouse.click(500, 300)
 
             for _ in range(12):
@@ -69,7 +78,7 @@ async def get_stream(
                     "stream_link": captured_data["stream"]
                 }
             else:
-                raise HTTPException(status_code=404, detail="Stream link (.mpd) capture කරගැනීමට නොහැකි විය.")
+                raise HTTPException(status_code=404, detail="Stream link not found")
 
         except Exception as e:
             await browser.close()
