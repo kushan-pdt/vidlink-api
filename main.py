@@ -35,7 +35,6 @@ async def get_stream(
     captured_data = {"stream": None}
 
     async with async_playwright() as p:
-        # Docker environment එකට සාර්ථකව ගැලපෙන Chromium launch arguments
         browser = await p.chromium.launch(
             headless=True,
             args=[
@@ -43,13 +42,14 @@ async def get_stream(
                 "--disable-setuid-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-blink-features=AutomationControlled",
-                "--disable-gpu",
+                "--disable-web-security",
+                "--disable-features=IsolateOrigins,site-per-process",
                 "--window-size=1920,1080"
             ]
         )
         
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             viewport={"width": 1920, "height": 1080},
             device_scale_factor=1,
             is_mobile=False,
@@ -59,26 +59,29 @@ async def get_stream(
 
         page = await context.new_page()
 
-        # Network requests intercept කිරීම (.mpd සහ .m3u8)
-        def handle_request(request):
-            req_url = request.url
+        # Intercept both requests and responses for .mpd or .m3u8
+        def filter_url(req_url):
             if (".mpd" in req_url or ".m3u8" in req_url) and not captured_data["stream"]:
-                if not ("sub" in req_url or ".m4s" in req_url or ".ts" in req_url):
+                if not any(x in req_url for x in ["sub", ".m4s", ".ts", "preview", "sprite"]):
                     captured_data["stream"] = req_url
 
-        page.on("request", handle_request)
+        page.on("request", lambda req: filter_url(req.url))
+        page.on("response", lambda res: filter_url(res.url))
 
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            await asyncio.sleep(4)
+            await asyncio.sleep(5)
 
-            # Player එක Click කර Video Stream Trigger කිරීම
-            await page.mouse.click(600, 400)
-            await asyncio.sleep(2)
-            await page.mouse.click(600, 400)
+            # Try clicking multiple potential player areas
+            click_points = [(960, 540), (500, 300), (600, 400), (400, 200)]
+            for x, y in click_points:
+                if captured_data["stream"]:
+                    break
+                await page.mouse.click(x, y)
+                await asyncio.sleep(1.5)
 
-            # Stream URL එක capture වෙනකම් polling කිරීම
-            for _ in range(12):
+            # Wait up to 15 seconds for network capture
+            for _ in range(15):
                 if captured_data["stream"]:
                     break
                 await asyncio.sleep(1)
@@ -93,7 +96,7 @@ async def get_stream(
                     "stream_link": captured_data["stream"]
                 }
             else:
-                raise HTTPException(status_code=404, detail="404: Stream link not found")
+                raise HTTPException(status_code=404, detail="Stream link not found")
 
         except Exception as e:
             await browser.close()
