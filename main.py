@@ -35,35 +35,53 @@ async def get_stream(
     captured_data = {"stream": None}
 
     async with async_playwright() as p:
-        # Browser with cloud flags
+        # Chromium launch options to bypass anti-bot mechanisms
         browser = await p.chromium.launch(
             headless=True,
             args=[
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
                 "--disable-dev-shm-usage",
-                "--disable-gpu"
+                "--disable-blink-features=AutomationControlled",
+                "--disable-gpu",
+                "--window-size=1920,1080"
             ]
         )
+        
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080},
+            device_scale_factor=1,
+            is_mobile=False,
+            has_touch=False,
+            locale="en-US",
+            timezone_id="America/New_York"
         )
+
         page = await context.new_page()
 
+        # Intercept network requests for stream manifests
         def handle_request(request):
             req_url = request.url
-            if ".mpd" in req_url and not captured_data["stream"]:
-                captured_data["stream"] = req_url
+            if (".mpd" in req_url or ".m3u8" in req_url) and not captured_data["stream"]:
+                # Ignore subtitle or segment files
+                if not ("sub" in req_url or ".m4s" in req_url or ".ts" in req_url):
+                    captured_data["stream"] = req_url
 
         page.on("request", handle_request)
 
         try:
-            await page.goto(url, timeout=60000)
-            await asyncio.sleep(4)
+            # Navigate to page with commit wait
+            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            await asyncio.sleep(3)
 
-            await page.mouse.click(500, 300)
+            # Interact with player to trigger network stream loading
+            await page.mouse.click(600, 400)
+            await asyncio.sleep(2)
+            await page.mouse.click(600, 400)
 
-            for _ in range(12):
+            # Poll for stream link up to 15 seconds
+            for _ in range(15):
                 if captured_data["stream"]:
                     break
                 await asyncio.sleep(1)
@@ -78,7 +96,7 @@ async def get_stream(
                     "stream_link": captured_data["stream"]
                 }
             else:
-                raise HTTPException(status_code=404, detail="Stream link not found")
+                raise HTTPException(status_code=404, detail="404: Stream link not found")
 
         except Exception as e:
             await browser.close()
