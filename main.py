@@ -35,7 +35,7 @@ async def get_stream(
     captured_data = {"stream": None}
 
     async with async_playwright() as p:
-        # Chromium launch options to bypass anti-bot mechanisms
+        # Docker environment එකට සාර්ථකව ගැලපෙන Chromium launch arguments
         browser = await p.chromium.launch(
             headless=True,
             args=[
@@ -54,34 +54,31 @@ async def get_stream(
             device_scale_factor=1,
             is_mobile=False,
             has_touch=False,
-            locale="en-US",
-            timezone_id="America/New_York"
+            locale="en-US"
         )
 
         page = await context.new_page()
 
-        # Intercept network requests for stream manifests
+        # Network requests intercept කිරීම (.mpd සහ .m3u8)
         def handle_request(request):
             req_url = request.url
             if (".mpd" in req_url or ".m3u8" in req_url) and not captured_data["stream"]:
-                # Ignore subtitle or segment files
                 if not ("sub" in req_url or ".m4s" in req_url or ".ts" in req_url):
                     captured_data["stream"] = req_url
 
         page.on("request", handle_request)
 
         try:
-            # Navigate to page with commit wait
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            await asyncio.sleep(3)
+            await asyncio.sleep(4)
 
-            # Interact with player to trigger network stream loading
+            # Player එක Click කර Video Stream Trigger කිරීම
             await page.mouse.click(600, 400)
             await asyncio.sleep(2)
             await page.mouse.click(600, 400)
 
-            # Poll for stream link up to 15 seconds
-            for _ in range(15):
+            # Stream URL එක capture වෙනකම් polling කිරීම
+            for _ in range(12):
                 if captured_data["stream"]:
                     break
                 await asyncio.sleep(1)
